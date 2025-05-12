@@ -33,6 +33,10 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+from langchain_core.documents import Document
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import LanceDB
@@ -57,7 +61,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 DATA_DIR = Path("./lancedb")          # LanceDB directory (created automatically)
 TABLE_NAME = "meeting_transcripts"     # LanceDB table name
-CHUNK_SIZE = 1000                      # characters per chunk (adjust as needed)
+CHUNK_SIZE = 100000                      # characters per chunk (adjust as needed)
 CHUNK_OVERLAP = 100                    # overlap to preserve context
 TOP_K = 4                              # number of chunks to retrieve for each query
 
@@ -110,7 +114,7 @@ async def log_requests(request: Request, call_next) -> Response:
 # ---------------------------------------------------------------------------
 # LLM / Embeddings / Vector Store Setup ------------------------------------
 # ---------------------------------------------------------------------------
-embeddings = CohereEmbeddings(
+embedding_model = CohereEmbeddings(
     model="embed-multilingual-v3.0", 
     cohere_api_key=COHERE_API_KEY
 )
@@ -125,6 +129,7 @@ logger.info("Initialized Groq chat model: deepseek-r1-distill-llama-70b")
 
 # Create or open LanceDB table once at startup
 # ---------------------------------------------------------------------------
+vector_store = LanceDB(embedding=embedding_model, uri=DATA_DIR, table_name=TABLE_NAME)
 # Helper Utilities ----------------------------------------------------------
 # ---------------------------------------------------------------------------
 
@@ -148,56 +153,123 @@ class DocumentProcessor:
 
 
 class RetrievalService:
-    """Handles context retrieval and response generation."""
+    """Handles context retrieval and response generation using LangChain QA chain."""
     
-    @staticmethod
-    def prepare_context(question: str, k: int = TOP_K) -> str:
-        """Retrieve k most relevant chunks and build a single context string."""
-        assert vector_store is not None
-        
-        logger.debug(f"Retrieving top {k} chunks for question: {question}")
-        start_time = time.time()
-        docs = vector_store.similarity_search(question, k=k)
-        elapsed = time.time() - start_time
-        
-        logger.debug(f"Retrieved {len(docs)} chunks in {elapsed:.4f}s")
-        return "\n".join(d.page_content for d in docs)
     
-    @staticmethod
-    async def stream_answer(question: str) -> AsyncGenerator[str, None]:
-        """Async generator yielding answer tokens as they stream from Groq LLM."""
-        logger.info(f"Generating streaming answer for question: {question}")
-        
-        # Get context from vector store
-        start_time = time.time()
-        context = RetrievalService.prepare_context(question)
-        retrieval_time = time.time() - start_time
-        logger.debug(f"Context retrieval completed in {retrieval_time:.4f}s")
-        
-        # Prepare prompts for the LLM
-        system_prompt = (
-            "You are an AI meeting assistant. Answer questions using ONLY the context "
-            "provided below. If the answer is not in the context, say you don't know."
+    def __init__(self):
+        logger.info("Initializing QA chain")
+        # Configure retriever with more options for better results
+        self.retriever = vector_store.as_retriever(
+            search_type="similarity",
+            search_kwargs={
+                "k": TOP_K,
+            }
         )
-        user_message = f"Context:\n{context}\n\nQuestion: {question}\nAnswer:"
+        logger.info(f"Configured retriever with k={TOP_K}, fetch_k={TOP_K * 2}")
         
-        # Stream response from the LLM
-        token_count = 0
-        generation_start = time.time()
+        # Create a more detailed prompt template with better instructions
+        self.prompt = ChatPromptTemplate.from_template(
+            """You are an AI meeting assistant that helps extract information from meeting transcripts.
+
+"""
+            """CONTEXT INFORMATION:
+{context}
+
+"""
+            """QUESTION: {question}
+
+"""
+            """INSTRUCTIONS:
+1. Answer the question based ONLY on the context provided above.
+2. If the answer is not in the context, respond with 'I don't have that information in the meeting transcript.'
+3. Be concise and to the point, focusing on the specific information requested.
+4. If you quote from the transcript, use the exact wording.
+5. If multiple people discussed the topic, mention their perspectives.
+6. DO NOT use <think> tags in your response.
+
+ANSWER:"""
+        )
         
-        # chat_model.stream returns an iterator of ChatCompletionChunk objects
-        for chunk in chat_model.stream(system_prompt=system_prompt, user_message=user_message):
-            # Each chunk may contain multiple choices; we concatenate their deltas
-            for choice in chunk.choices:
-                delta = choice.delta  # type: ignore[attr-defined]
-                if delta and getattr(delta, "content", None):
-                    token_count += 1
-                    yield delta.content
-                    
-        # Ensure final flush / newline
-        generation_time = time.time() - generation_start
-        logger.info(f"Generated {token_count} tokens in {generation_time:.4f}s")
-        yield "\n"
+        # Function to format retrieved documents with metadata
+        def format_docs(docs):
+            formatted_docs = []
+            for i, doc in enumerate(docs, 1):
+                metadata = doc.metadata or {}
+                source = metadata.get("filename", "Unknown source")
+                timestamp = metadata.get("ingestion_timestamp", "")
+                formatted_docs.append(
+                    f"[Document {i}] Source: {source} {doc.page_content}"
+                )
+            return "\n\n".join(formatted_docs)
+
+        # Function to clean the response by removing <think> tags
+        def clean_response(response: str) -> str:
+            """Remove <think> tags and their content from the response."""
+            import re
+            # Remove everything between <think> and </think> tags
+            cleaned = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
+            # Remove any remaining <think> or </think> tags
+            cleaned = re.sub(r'</?think>', '', cleaned)
+            # Clean up extra whitespace
+            cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+            cleaned = cleaned.strip()
+            return cleaned
+        
+        # Create an enhanced QA chain with document formatting and error handling
+        qa_chain = (
+            {
+                "context": self.retriever | format_docs,  # Format documents with metadata
+                "question": RunnablePassthrough()
+            }
+            | self.prompt 
+            | chat_model 
+            | StrOutputParser()
+            | clean_response  # Clean the response to remove <think> tags
+        )
+        
+        # Store the chain and retriever for later use
+        self.qa_chain = qa_chain
+    
+    
+    
+    async def get_answer(self, question: str) -> dict:
+        """Generate a complete answer for the given question using the QA chain."""
+        logger.info(f"Generating answer for question: {question}")
+        
+        # Invoke the chain to get the answer
+        start_time = time.time()
+        
+        try:
+            # First retrieve the relevant documents to include in response
+            docs = self.retriever.invoke(question)
+            sources = []
+            
+            # Extract source information from documents
+            for doc in docs:
+                sources.append({
+                    "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
+                    "metadata": doc.metadata
+                })
+            
+            # Generate the answer using the QA chain
+            answer = self.qa_chain.invoke(question)
+            generation_time = time.time() - start_time
+            logger.info(f"Generated answer in {generation_time:.4f}s")
+            logger.debug(f"Raw answer before cleaning: {answer}")
+            
+            # Return both the answer and the sources
+            return {
+                "answer": answer,
+                "sources": sources,
+                "generation_time": generation_time
+            }
+        except Exception as e:
+            logger.error(f"Error generating answer: {str(e)}")
+            return {
+                "answer": f"Sorry, I encountered an error while processing your question: {str(e)}",
+                "sources": [],
+                "error": str(e)
+            }
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +327,7 @@ async def ingest(files: List[UploadFile] = File(...)) -> JSONResponse:  # noqa: 
         split_docs = DocumentProcessor.split_documents(raw_docs)
         
         # Store in vector database
-        LanceDB.add_documents(split_docs)
+        vector_store.add_documents(split_docs)
         
         processing_time = time.time() - start_time
         logger.info(f"Successfully indexed {len(split_docs)} chunks from {len(files)} files in {processing_time:.4f}s")
@@ -272,15 +344,15 @@ async def ingest(files: List[UploadFile] = File(...)) -> JSONResponse:  # noqa: 
 
 
 @app.get("/query")
-async def query(q: str) -> StreamingResponse:
+async def query(q: str) -> JSONResponse:
     """
-    Retrieve context from LanceDB and stream an answer via Groq LLM.
+    Answer questions using the RAG QA chain.
     
     Args:
-        q: Query string
+        q: Question string
         
     Returns:
-        StreamingResponse with tokens from the LLM
+        JSONResponse with the complete answer from the QA chain and source information
     
     Raises:
         HTTPException: If query is empty
@@ -293,11 +365,22 @@ async def query(q: str) -> StreamingResponse:
     logger.info(f"Processing query: {q}")
     
     try:
-        # Return streaming response
-        return StreamingResponse(
-            RetrievalService.stream_answer(q), 
-            media_type="text/plain"
-        )
+        # Initialize retrieval service if not already done
+        retrieval_service = RetrievalService()
+        
+        # Get answer from QA chain
+        start_time = time.time()
+        result = await retrieval_service.get_answer(q)
+        process_time = time.time() - start_time
+        
+        # Return enhanced JSON response with sources
+        return JSONResponse({
+            "answer": result.get("answer", ""),
+            "sources": result.get("sources", []),
+            "timestamp": datetime.now().isoformat(),
+            "query": q,
+            "process_time_seconds": round(process_time, 4)
+        })
     except Exception as e:
         logger.error(f"Error processing query: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
