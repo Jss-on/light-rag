@@ -1,0 +1,146 @@
+# Light-RAG: Lightweight Retrieval-Augmented Generation for Meeting Transcripts
+
+## Overview
+
+Light-RAG is a lightweight, production-ready Retrieval-Augmented Generation (RAG) system designed specifically for querying meeting transcripts. It provides accurate answers to questions about meeting content.
+
+### Key Features
+
+- **Modern RAG Architecture**: Uses LangChain's composable components for robust RAG capabilities
+- **Fast Retrieval**: LanceDB vector database for efficient similarity search
+- **Intelligent QA**: Enhanced prompting and context formatting for better answers
+- **Source Attribution**: Answers include source information for transparency
+- **Clean API**: FastAPI interface with proper documentation and error handling
+
+## Technical Stack
+
+- **Framework**: FastAPI
+- **Vector Database**: LanceDB (local files)
+- **Embeddings**: Cohere multilingual embeddings (embed-multilingual-v3.0) as default
+- **LLM**: Groq (deepseek-r1-distill-llama-70b) as default
+- **RAG Implementation**: LangChain QA Chain
+
+## Installation
+
+### Prerequisites
+
+- Python 3.9+
+- Cohere API key
+- Groq API key
+
+### Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/Jss-on/light-rag.git
+cd light-rag
+
+# Create virtual environment (optional but recommended)
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Create .env file with your API keys
+COHERE_API_KEY=api_key
+GROQ_API_KEY=api_key
+```
+
+## Usage
+
+### Running the API Server
+
+```bash
+# Start the API server
+uvicorn app:app --reload
+```
+
+The API will be available at http://localhost:8000
+
+For interactive API documentation, visit http://localhost:8000/docs
+
+### API Endpoints
+
+#### 1. Ingest Meeting Transcripts
+
+```bash
+# Upload a meeting transcript
+curl -X POST \
+  http://localhost:8000/ingest \
+  -F "files=@./data/transcript.txt"
+```
+
+#### 2. Query Meeting Content
+
+```bash
+# Ask a question about the meeting
+curl "http://localhost:8000/query?q=Who%20were%20the%20participants%20in%20the%20meeting?"
+```
+
+Response format:
+```json
+{
+  "answer": "The participants in the meeting were Sarah Chen, Michael Rodriguez, Alex Kim, Jordan Taylor, and Priya Patel.",
+  "sources": [
+    {
+      "content": "Meeting Title: Q2 Product Roadmap Discussion
+Date: May 10, 2025
+Participants: Sarah Chen, Michael Rodriguez, Alex Kim, Jordan Taylor, Priya Patel...",
+      "metadata": {
+        "filename": "transcript.txt",
+        "ingestion_timestamp": "2025-05-13T00:20:15.123456"
+      }
+    }
+  ],
+  "timestamp": "2025-05-13T00:21:30.987654",
+  "query": "Who were the participants in the meeting?",
+  "process_time_seconds": 1.234
+}
+```
+
+#### 3. Health Check
+
+```bash
+# Check API status
+curl http://localhost:8000/health
+```
+
+### Transcript Format
+
+The system works with plain text meeting transcripts. For optimal results, include metadata like:
+
+```
+Meeting Title: [Title]
+Date: [Date]
+Participants: [Name1], [Name2], ...
+
+[Speaker1]: [Text]
+[Speaker2]: [Text]
+...
+```
+
+### Development
+
+The modular design makes it easy to extend the system:
+
+1. Add new endpoints in the FastAPI application
+2. Enhance the QA chain with additional components
+3. Implement different retrieval strategies
+
+### Production Considerations
+
+- Add authentication for API endpoints
+- Implement rate limiting and logging
+- Consider hosting LanceDB on a persistent volume
+- Add monitoring and metrics collection
+
+## Limitations
+
+- Currently optimized for text-based meeting transcripts
+- LanceDB is a local file-based database
+- No user authentication implemented in this version
+
+## License
+
+MIT
