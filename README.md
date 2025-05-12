@@ -4,6 +4,20 @@
 
 Light-RAG is a lightweight, production-ready Retrieval-Augmented Generation (RAG) system designed specifically for querying meeting transcripts. It provides accurate answers to questions about meeting content.
 
+### What I Built and Why
+
+In today's collaborative work environment, important information and decisions are often buried in lengthy meeting transcripts, making it difficult to retrieve key insights without reviewing entire documents. Light-RAG solves this problem by:
+
+1. **Making Meeting Content Accessible**: I built a system that allows users to ask natural language questions about past meetings and receive accurate, contextual answers.
+
+2. **Optimizing for Speed and Accuracy**: By using LanceDB (a local vector database) combined with powerful embedding models from Cohere and LLM capabilities from Groq, I created a system that's both fast and precise.
+
+3. **Minimizing Infrastructure Requirements**: Unlike complex enterprise solutions, Light-RAG runs with minimal setup - either locally or in a simple Docker container, making it accessible to teams of any size.
+
+4. **Prioritizing Transparency**: The system provides source attribution so users can verify the information and see where in the transcript the answer was derived from.
+
+I developed this solution to bridge the gap between raw meeting transcripts and actionable knowledge, helping teams maintain institutional memory and make better-informed decisions based on past discussions.
+
 ### Key Features
 
 - **Modern RAG Architecture**: Uses LangChain's composable components for robust RAG capabilities
