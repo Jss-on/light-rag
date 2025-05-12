@@ -28,6 +28,24 @@ Light-RAG is a lightweight, production-ready Retrieval-Augmented Generation (RAG
 - Cohere API key
 - Groq API key
 
+### Getting API Keys
+
+#### Cohere API Key
+
+1. Go to [Cohere's website](https://cohere.com/)
+2. Sign up for a free account
+3. Navigate to the [API keys section](https://dashboard.cohere.com/api-keys)
+4. Create a new API key
+5. Copy the key and save it securely
+
+#### Groq API Key
+
+1. Go to [Groq's website](https://console.groq.com/)
+2. Create a free account
+3. After signing in, go to the API keys section
+4. Generate a new API key
+5. Copy the key and save it securely
+
 ### Setup
 
 ```bash
