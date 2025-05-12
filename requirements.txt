@@ -1,0 +1,14 @@
+python-dotenv
+typing-extensions
+pydantic
+cohere
+groq
+lancedb
+pyarrow
+langchain-cohere
+langchain-community
+langchain-cohere
+langchain-groq
+langchain_text_splitters
+fastapi
+uvicorn
